@@ -3,104 +3,107 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>Pump.fun Paper Trader</title>
+<title>PUMP.FUN SNIPER</title>
 
 <style>
 body {
-    margin: 0;
-    background: #111;
-    color: white;
-    font-family: Arial, sans-serif;
+  margin: 0;
+  background: #0b0f14;
+  color: #ffffff;
+  font-family: Arial, sans-serif;
 }
 
 .container {
-    max-width: 1100px;
-    margin: auto;
-    padding: 25px;
+  max-width: 700px;
+  margin: auto;
+  padding: 25px;
 }
 
 h1 {
-    margin-bottom: 5px;
-}
-
-.status {
-    color: #00ff88;
-    margin-bottom: 25px;
-}
-
-.cards {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 15px;
+  text-align: center;
+  margin-bottom: 25px;
 }
 
 .card {
-    background: #1d1d1d;
-    padding: 18px;
-    border-radius: 12px;
+  background: #151b23;
+  border: 1px solid #27313d;
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 15px;
 }
 
-.label {
-    color: #aaa;
-    font-size: 13px;
-}
-
-.value {
-    font-size: 25px;
-    margin-top: 8px;
-}
-
-.controls {
-    margin-top: 25px;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 15px;
+label {
+  display: block;
+  margin-top: 15px;
+  margin-bottom: 6px;
+  color: #aeb8c4;
 }
 
 input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 10px;
-    margin-top: 7px;
-    background: #222;
-    color: white;
-    border: 1px solid #444;
-    border-radius: 6px;
-}
-
-.token {
-    margin-top: 25px;
-    background: #1d1d1d;
-    padding: 20px;
-    border-radius: 12px;
-}
-
-.row {
-    margin: 8px 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #35404d;
+  background: #0d131a;
+  color: white;
+  font-size: 16px;
 }
 
 button {
-    padding: 12px 20px;
-    margin-top: 15px;
-    border: 0;
-    border-radius: 7px;
-    cursor: pointer;
+  width: 100%;
+  padding: 15px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 17px;
+  font-weight: bold;
+  cursor: pointer;
+  margin-top: 12px;
 }
 
-.buy {
-    background: #00c878;
-    color: white;
+.start {
+  background: #19c37d;
+  color: white;
 }
 
-.sell {
-    background: #d83232;
-    color: white;
+.stop {
+  background: #e5484d;
+  color: white;
 }
 
-.warning {
-    margin-top: 20px;
-    color: #ffcc00;
+.status {
+  text-align: center;
+  font-size: 22px;
+  font-weight: bold;
+  padding: 15px;
+  border-radius: 10px;
+  background: #242b34;
+}
+
+.stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid #27313d;
+}
+
+.token {
+  padding: 12px;
+  margin-top: 10px;
+  background: #0d131a;
+  border-radius: 8px;
+  border: 1px solid #27313d;
+}
+
+.small {
+  color: #8d99a8;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.save {
+  background: #3267e3;
+  color: white;
 }
 </style>
 </head>
@@ -109,99 +112,87 @@ button {
 
 <div class="container">
 
-<h1>🚀 PUMP.FUN PAPER TRADER</h1>
-
-<div class="status">
-🟢 PAPER MODE — REAL BUY/SELL OFF
-</div>
-
-<div class="cards">
+<h1>🚀 PUMP.FUN SNIPER</h1>
 
 <div class="card">
-<div class="label">BALANCE</div>
-<div class="value" id="balance">$50.00</div>
-</div>
 
-<div class="card">
-<div class="label">P/L</div>
-<div class="value" id="pnl">$0.00</div>
-</div>
+<label>Amount per token ($)</label>
+<input id="amountUsd" type="number" min="1" step="1" value="5">
 
-<div class="card">
-<div class="label">P/L %</div>
-<div class="value" id="pnlPercent">0%</div>
-</div>
+<label>Hold time (seconds)</label>
+<input id="holdSeconds" type="number" min="1" value="30">
 
-<div class="card">
-<div class="label">TRADES</div>
-<div class="value" id="trades">0</div>
-</div>
-
-</div>
-
-<div class="controls">
-
-<div class="card">
-<label>Budget per trade ($)</label>
-<input id="budget" type="number" value="5" min="0.1">
-</div>
-
-<div class="card">
 <label>Take Profit (%)</label>
-<input id="takeProfit" type="number" value="20">
-</div>
+<input id="takeProfitPercent" type="number" min="1" value="50">
 
-<div class="card">
 <label>Stop Loss (%)</label>
-<input id="stopLoss" type="number" value="10">
+<input id="stopLossPercent" type="number" min="1" value="10">
+
+<label>Max open positions</label>
+<input id="maxOpenPositions" type="number" min="1" value="10">
+
+<button class="save" onclick="saveConfig()">
+💾 SAVE SETTINGS
+</button>
+
 </div>
 
 <div class="card">
-<label>Buy Size (%)</label>
-<input id="buySize" type="number" value="10">
+
+<div id="status" class="status">
+🔴 STOPPED
 </div>
 
-</div>
-
-<div class="token">
-
-<h2>🆕 LATEST TOKEN</h2>
-
-<div class="row">
-<strong>Name:</strong>
-<span id="tokenName">Waiting...</span>
-</div>
-
-<div class="row">
-<strong>Symbol:</strong>
-<span id="tokenSymbol">-</span>
-</div>
-
-<div class="row">
-<strong>Mint:</strong>
-<span id="tokenMint">-</span>
-</div>
-
-<div class="row">
-<strong>Creator:</strong>
-<span id="tokenCreator">-</span>
-</div>
-
-<div class="row">
-<strong>Signature:</strong>
-<span id="tokenSignature">-</span>
-</div>
-
-<button class="buy" onclick="paperBuy()">
-PAPER BUY
+<button class="start" onclick="startBot()">
+🟢 START BOT
 </button>
 
-<button class="sell" onclick="paperSell()">
-PAPER SELL
+<button class="stop" onclick="stopBot()">
+🔴 STOP BOT
 </button>
 
-<div class="warning">
-⚠️ REAL BUY: OFF &nbsp;&nbsp; REAL SELL: OFF
+</div>
+
+<div class="card">
+
+<div class="stat">
+<span>Amount / Token</span>
+<strong id="showAmount">$5</strong>
+</div>
+
+<div class="stat">
+<span>Hold Time</span>
+<strong id="showHold">30 sec</strong>
+</div>
+
+<div class="stat">
+<span>Take Profit</span>
+<strong id="showTP">+50%</strong>
+</div>
+
+<div class="stat">
+<span>Stop Loss</span>
+<strong id="showSL">-10%</strong>
+</div>
+
+<div class="stat">
+<span>Max Positions</span>
+<strong id="showMax">10</strong>
+</div>
+
+<div class="stat">
+<span>Open Positions</span>
+<strong id="openPositions">0</strong>
+</div>
+
+</div>
+
+<div class="card">
+
+<h2>🆕 Latest Token</h2>
+
+<div id="latestToken">
+Waiting for new token...
 </div>
 
 </div>
@@ -210,145 +201,183 @@ PAPER SELL
 
 <script>
 
-let balance = 50;
-let startingBalance = 50;
-let trades = 0;
-let position = null;
+async function loadConfig() {
 
-async function loadToken() {
+  try {
 
-    try {
+    const response = await fetch("/api/config");
+    const config = await response.json();
 
-        const response = await fetch("/api/token");
-        const token = await response.json();
+    document.getElementById("amountUsd").value =
+      config.amountUsd ?? 5;
 
-        if (!token || !token.name) return;
+    document.getElementById("holdSeconds").value =
+      config.holdSeconds ?? 30;
 
-        document.getElementById("tokenName").textContent =
-            token.name || "N/A";
+    document.getElementById("takeProfitPercent").value =
+      config.takeProfitPercent ?? 50;
 
-        document.getElementById("tokenSymbol").textContent =
-            token.symbol || "N/A";
+    document.getElementById("stopLossPercent").value =
+      config.stopLossPercent ?? 10;
 
-        document.getElementById("tokenMint").textContent =
-            token.mint || "N/A";
+    document.getElementById("maxOpenPositions").value =
+      config.maxOpenPositions ?? 10;
 
-        document.getElementById("tokenCreator").textContent =
-            token.creator || "N/A";
+    updateDisplay(config);
 
-        document.getElementById("tokenSignature").textContent =
-            token.signature || "N/A";
+  } catch (error) {
 
-    } catch (error) {
+    console.log("Config error:", error);
 
-        console.log("Dashboard API error:", error.message);
-
-    }
+  }
 
 }
 
-function updateDisplay() {
+function updateDisplay(config) {
 
-    document.getElementById("balance").textContent =
-        "$" + balance.toFixed(2);
+  document.getElementById("showAmount").textContent =
+    "$" + Number(config.amountUsd ?? 5);
 
-    const pnl = balance - startingBalance;
+  document.getElementById("showHold").textContent =
+    Number(config.holdSeconds ?? 30) + " sec";
 
-    document.getElementById("pnl").textContent =
-        "$" + pnl.toFixed(2);
+  document.getElementById("showTP").textContent =
+    "+" + Number(config.takeProfitPercent ?? 50) + "%";
 
-    const percent =
-        (pnl / startingBalance) * 100;
+  document.getElementById("showSL").textContent =
+    "-" + Number(config.stopLossPercent ?? 10) + "%";
 
-    document.getElementById("pnlPercent").textContent =
-        percent.toFixed(2) + "%";
+  document.getElementById("showMax").textContent =
+    Number(config.maxOpenPositions ?? 10);
 
-    document.getElementById("trades").textContent =
-        trades;
+  const status = document.getElementById("status");
 
-}
+  if (config.botRunning) {
 
-function paperBuy() {
+    status.textContent = "🟢 RUNNING";
 
-    if (position) {
+  } else {
 
-        alert("Already have a PAPER position.");
+    status.textContent = "🔴 STOPPED";
 
-        return;
-
-    }
-
-    const budget =
-        Number(document.getElementById("budget").value);
-
-    if (budget <= 0 || budget > balance) {
-
-        alert("Invalid budget.");
-
-        return;
-
-    }
-
-    position = {
-        amount: budget,
-        entry: 1
-    };
-
-    balance -= budget;
-
-    trades++;
-
-    updateDisplay();
-
-    alert(
-        "PAPER BUY\n\n" +
-        "Amount: $" + budget.toFixed(2)
-    );
+  }
 
 }
 
-function paperSell() {
+async function saveConfig() {
 
-    if (!position) {
+  const config = {
 
-        alert("No PAPER position.");
+    amountUsd:
+      Number(document.getElementById("amountUsd").value),
 
-        return;
+    holdSeconds:
+      Number(document.getElementById("holdSeconds").value),
 
-    }
+    takeProfitPercent:
+      Number(document.getElementById("takeProfitPercent").value),
 
-    const profitPercent =
-        Number(
-            prompt(
-                "Test SELL price change %\n\nExample: 20 = +20%\nExample: -10 = -10%"
-            )
-        );
+    stopLossPercent:
+      Number(document.getElementById("stopLossPercent").value),
 
-    if (isNaN(profitPercent)) return;
+    maxOpenPositions:
+      Number(document.getElementById("maxOpenPositions").value)
 
-    const result =
-        position.amount *
-        (1 + profitPercent / 100);
+  };
 
-    balance += result;
+  const response = await fetch("/api/config", {
 
-    position = null;
+    method: "POST",
 
-    updateDisplay();
+    headers: {
+      "Content-Type": "application/json"
+    },
 
-    alert(
-        "PAPER SELL\n\n" +
-        "Result: $" + result.toFixed(2) +
-        "\nP/L: " +
-        profitPercent.toFixed(2) + "%"
-    );
+    body: JSON.stringify(config)
+
+  });
+
+  const result = await response.json();
+
+  updateDisplay(result.config);
+
+  alert("Settings saved");
 
 }
 
-setInterval(loadToken, 1000);
+async function startBot() {
 
-loadToken();
-updateDisplay();
+  await fetch("/api/start", {
+    method: "POST"
+  });
+
+  await loadConfig();
+
+}
+
+async function stopBot() {
+
+  await fetch("/api/stop", {
+    method: "POST"
+  });
+
+  await loadConfig();
+
+}
+
+async function updateState() {
+
+  try {
+
+    const response =
+      await fetch("/api/state");
+
+    const state =
+      await response.json();
+
+    updateDisplay(state.config);
+
+    const positions =
+      state.positions || {};
+
+    document.getElementById("openPositions").textContent =
+      Object.keys(positions).length;
+
+    const token =
+      state.latestToken;
+
+    if (token && token.mint) {
+
+      document.getElementById("latestToken").innerHTML = `
+
+        <strong>${token.name || "N/A"}</strong>
+
+        <br>
+
+        Symbol:
+        ${token.symbol || "N/A"}
+
+        <br>
+
+        <span class="small">
+        ${token.mint}
+        </span>
+
+      `;
+
+    }
+
+  } catch (error) {
+
+    console.log("State error:", error);
+
+  }
+
+}
+
+loadConfig();
+
+setInterval(updateState, 1000);
 
 </script>
 

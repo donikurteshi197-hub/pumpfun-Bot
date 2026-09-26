@@ -1,0 +1,11 @@
+{
+  "botRunning": true,
+  "amountUsd": 5,
+  "holdSeconds": 30,
+  "takeProfitPercent": 50,
+  "stopLossPercent": 10,
+  "maxOpenPositions": 10,
+  "newTokens": true,
+  "realBuy": false,
+  "realSell": false
+}
