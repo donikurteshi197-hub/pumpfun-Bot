@@ -1,4 +1,3 @@
-const trader = require("./trader.js");
 require("dotenv").config();
 
 const WebSocket = require("ws");
@@ -108,8 +107,6 @@ function startAutomaticSell(token) {
     console.log("🔴 AUTO SELL SIGNAL");
     console.log("Token:", token.symbol);
     console.log("Mint:", token.mint);
-  try { await trader.inspectToken(token.mint); } catch (error) { console.log("Token inspection error:", error.message); }
-  await fetch("http://127.0.0.1:3000/api/token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(token) });
     console.log("Reason: HOLD TIME FINISHED");
 
     positions.delete(token.mint);
@@ -155,8 +152,6 @@ async function handleNewToken(data) {
   console.log("Name:", token.name);
   console.log("Symbol:", token.symbol);
   console.log("Mint:", token.mint);
-  try { await trader.inspectToken(token.mint); } catch (error) { console.log("Token inspection error:", error.message); }
-  await fetch("http://127.0.0.1:3000/api/token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(token) });
 
   const position = {
     mint: token.mint,

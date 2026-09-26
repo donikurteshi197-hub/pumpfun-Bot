@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Pump.fun Paper Trader</title>
+
+<style>
+body {
+    margin: 0;
+    background: #111;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+.container {
+    max-width: 1100px;
+    margin: auto;
+    padding: 25px;
+}
+
+h1 {
+    margin-bottom: 5px;
+}
+
+.status {
+    color: #00ff88;
+    margin-bottom: 25px;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 15px;
+}
+
+.card {
+    background: #1d1d1d;
+    padding: 18px;
+    border-radius: 12px;
+}
+
+.label {
+    color: #aaa;
+    font-size: 13px;
+}
+
+.value {
+    font-size: 25px;
+    margin-top: 8px;
+}
+
+.controls {
+    margin-top: 25px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 15px;
+}
+
+input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+    margin-top: 7px;
+    background: #222;
+    color: white;
+    border: 1px solid #444;
+    border-radius: 6px;
+}
+
+.token {
+    margin-top: 25px;
+    background: #1d1d1d;
+    padding: 20px;
+    border-radius: 12px;
+}
+
+.row {
+    margin: 8px 0;
+}
+
+button {
+    padding: 12px 20px;
+    margin-top: 15px;
+    border: 0;
+    border-radius: 7px;
+    cursor: pointer;
+}
+
+.buy {
+    background: #00c878;
+    color: white;
+}
+
+.sell {
+    background: #d83232;
+    color: white;
+}
+
+.warning {
+    margin-top: 20px;
+    color: #ffcc00;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>🚀 PUMP.FUN PAPER TRADER</h1>
+
+<div class="status">
+🟢 PAPER MODE — REAL BUY/SELL OFF
+</div>
+
+<div class="cards">
+
+<div class="card">
+<div class="label">BALANCE</div>
+<div class="value" id="balance">$50.00</div>
+</div>
+
+<div class="card">
+<div class="label">P/L</div>
+<div class="value" id="pnl">$0.00</div>
+</div>
+
+<div class="card">
+<div class="label">P/L %</div>
+<div class="value" id="pnlPercent">0%</div>
+</div>
+
+<div class="card">
+<div class="label">TRADES</div>
+<div class="value" id="trades">0</div>
+</div>
+
+</div>
+
+<div class="controls">
+
+<div class="card">
+<label>Budget per trade ($)</label>
+<input id="budget" type="number" value="5" min="0.1">
+</div>
+
+<div class="card">
+<label>Take Profit (%)</label>
+<input id="takeProfit" type="number" value="20">
+</div>
+
+<div class="card">
+<label>Stop Loss (%)</label>
+<input id="stopLoss" type="number" value="10">
+</div>
+
+<div class="card">
+<label>Buy Size (%)</label>
+<input id="buySize" type="number" value="10">
+</div>
+
+</div>
+
+<div class="token">
+
+<h2>🆕 LATEST TOKEN</h2>
+
+<div class="row">
+<strong>Name:</strong>
+<span id="tokenName">Waiting...</span>
+</div>
+
+<div class="row">
+<strong>Symbol:</strong>
+<span id="tokenSymbol">-</span>
+</div>
+
+<div class="row">
+<strong>Mint:</strong>
+<span id="tokenMint">-</span>
+</div>
+
+<div class="row">
+<strong>Creator:</strong>
+<span id="tokenCreator">-</span>
+</div>
+
+<div class="row">
+<strong>Signature:</strong>
+<span id="tokenSignature">-</span>
+</div>
+
+<button class="buy" onclick="paperBuy()">
+PAPER BUY
+</button>
+
+<button class="sell" onclick="paperSell()">
+PAPER SELL
+</button>
+
+<div class="warning">
+⚠️ REAL BUY: OFF &nbsp;&nbsp; REAL SELL: OFF
+</div>
+
+</div>
+
+</div>
+
+<script>
+
+let balance = 50;
+let startingBalance = 50;
+let trades = 0;
+let position = null;
+
+async function loadToken() {
+
+    try {
+
+        const response = await fetch("/api/token");
+        const token = await response.json();
+
+        if (!token || !token.name) return;
+
+        document.getElementById("tokenName").textContent =
+            token.name || "N/A";
+
+        document.getElementById("tokenSymbol").textContent =
+            token.symbol || "N/A";
+
+        document.getElementById("tokenMint").textContent =
+            token.mint || "N/A";
+
+        document.getElementById("tokenCreator").textContent =
+            token.creator || "N/A";
+
+        document.getElementById("tokenSignature").textContent =
+            token.signature || "N/A";
+
+    } catch (error) {
+
+        console.log("Dashboard API error:", error.message);
+
+    }
+
+}
+
+function updateDisplay() {
+
+    document.getElementById("balance").textContent =
+        "$" + balance.toFixed(2);
+
+    const pnl = balance - startingBalance;
+
+    document.getElementById("pnl").textContent =
+        "$" + pnl.toFixed(2);
+
+    const percent =
+        (pnl / startingBalance) * 100;
+
+    document.getElementById("pnlPercent").textContent =
+        percent.toFixed(2) + "%";
+
+    document.getElementById("trades").textContent =
+        trades;
+
+}
+
+function paperBuy() {
+
+    if (position) {
+
+        alert("Already have a PAPER position.");
+
+        return;
+
+    }
+
+    const budget =
+        Number(document.getElementById("budget").value);
+
+    if (budget <= 0 || budget > balance) {
+
+        alert("Invalid budget.");
+
+        return;
+
+    }
+
+    position = {
+        amount: budget,
+        entry: 1
+    };
+
+    balance -= budget;
+
+    trades++;
+
+    updateDisplay();
+
+    alert(
+        "PAPER BUY\n\n" +
+        "Amount: $" + budget.toFixed(2)
+    );
+
+}
+
+function paperSell() {
+
+    if (!position) {
+
+        alert("No PAPER position.");
+
+        return;
+
+    }
+
+    const profitPercent =
+        Number(
+            prompt(
+                "Test SELL price change %\n\nExample: 20 = +20%\nExample: -10 = -10%"
+            )
+        );
+
+    if (isNaN(profitPercent)) return;
+
+    const result =
+        position.amount *
+        (1 + profitPercent / 100);
+
+    balance += result;
+
+    position = null;
+
+    updateDisplay();
+
+    alert(
+        "PAPER SELL\n\n" +
+        "Result: $" + result.toFixed(2) +
+        "\nP/L: " +
+        profitPercent.toFixed(2) + "%"
+    );
+
+}
+
+setInterval(loadToken, 1000);
+
+loadToken();
+updateDisplay();
+
+</script>
+
+</body>
+</html>
