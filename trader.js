@@ -813,4 +813,4 @@ checkWallet().catch(error => {
     "Trader initialization error:",
     error.message
   );
-}
+});
