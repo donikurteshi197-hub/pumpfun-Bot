@@ -4,7 +4,7 @@
   "holdSeconds": 30,
   "takeProfitPercent": 50,
   "stopLossPercent": 10,
-  "maxOpenPositions": 10,
+  "maxOpenPositions": 50,
   "newTokens": true,
   "realBuy": false,
   "realSell": false
