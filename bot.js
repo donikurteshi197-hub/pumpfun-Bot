@@ -1,8 +1,11 @@
-const trader = require("./trader.js");
+
+"use strict";
+
 require("dotenv").config();
 
 const WebSocket = require("ws");
 const http = require("http");
+const trader = require("./trader.js");
 
 const WS_URL = "wss://pumpportal.fun/api/data";
 const SERVER = "http://127.0.0.1:3000";
@@ -11,233 +14,271 @@ let ws;
 let reconnectTimer;
 let botRunning = false;
 let config = {};
-const positions = new Map();
+let connecting = false;
 
-console.log("================================");
-console.log("PUMP.FUN AUTO SNIPER");
-console.log("================================");
-console.log("MODE: AUTO");
-console.log("BUY: AUTO");
-console.log("SELL: AUTO");
-console.log("================================");
+const positions = new Map();
+const processing = new Set();
+const seen = new Set();
 
 function request(path, method = "GET", body = null) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
-
-    const req = http.request(
-      `${SERVER}${path}`,
-      {
-        method,
-        headers: data
-          ? {
-              "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(data)
-            }
-          : {}
-      },
-      (res) => {
-        let result = "";
-
-        res.on("data", (chunk) => {
-          result += chunk;
-        });
-
-        res.on("end", () => {
-          try {
-            resolve(JSON.parse(result || "{}"));
-          } catch {
-            resolve({});
-          }
-        });
-      }
-    );
-
+    const req = http.request(`${SERVER}${path}`, {
+      method,
+      headers: data ? {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(data)
+      } : {}
+    }, res => {
+      let output = "";
+      res.on("data", chunk => output += chunk);
+      res.on("end", () => {
+        let parsed = {};
+        try { parsed = JSON.parse(output || "{}"); } catch {}
+        if (res.statusCode >= 400) {
+          return reject(new Error(`Dashboard HTTP ${res.statusCode}`));
+        }
+        resolve(parsed);
+      });
+    });
+    req.setTimeout(10000, () => req.destroy(new Error("Dashboard timeout")));
     req.on("error", reject);
-
     if (data) req.write(data);
-
     req.end();
   });
 }
 
 async function loadConfig() {
+  const result = await request("/api/config");
+  config = result || {};
+  botRunning = config.botRunning === true;
+}
+
+async function dashboardToken(token) {
   try {
-    const result = await request("/api/config");
-
-    config = result || {};
-    botRunning = config.botRunning === true;
-
-  } catch (error) {
-    console.log("Server connection error:", error.message);
+    await request("/api/token", "POST", token);
+  } catch (e) {
+    console.log("Dashboard token update failed:", e.message);
   }
 }
 
 async function savePosition(position) {
-  try {
-    await request("/api/position", "POST", position);
-  } catch (error) {
-    console.log("Position save error:", error.message);
-  }
+  await request("/api/position", "POST", position);
 }
 
 async function removePosition(mint) {
+  positions.delete(mint);
   try {
-    await request(
-      `/api/position/${encodeURIComponent(mint)}`,
-      "DELETE"
-    );
-  } catch (error) {
-    console.log("Position remove error:", error.message);
+    await request(`/api/position/${encodeURIComponent(mint)}`, "DELETE");
+  } catch (e) {
+    console.log("Position cleanup failed:", e.message);
   }
 }
 
-function startAutomaticSell(token) {
-  const holdSeconds = Number(config.holdSeconds || 30);
-  const holdMs = holdSeconds * 1000;
-
-  console.log("");
-  console.log("⏱️ AUTO SELL TIMER");
-  console.log("Token:", token.symbol);
-  console.log("Hold:", holdSeconds, "seconds");
-
-  setTimeout(async () => {
-    if (!positions.has(token.mint)) return;
-
-    console.log("");
-    console.log("🔴 AUTO SELL SIGNAL");
-    console.log("Token:", token.symbol);
-    console.log("Mint:", token.mint);
-    console.log("Reason: HOLD TIME FINISHED");
-
-    positions.delete(token.mint);
-
-    await removePosition(token.mint);
-
-    console.log("SELL: READY");
-  }, holdMs);
+function getSolUsd() {
+  return Number(config.solPriceUsd || process.env.SOL_PRICE_USD || 0);
 }
 
-async function handleNewToken(data) {
-  if (!data.mint) return;
-
-  if (!botRunning) return;
-
-  if (config.newTokens === false) return;
-
-  const maxPositions = Number(config.maxOpenPositions || 10);
-
-  if (positions.size >= maxPositions) {
-    console.log("MAX OPEN POSITIONS REACHED");
-    return;
+function amountSol() {
+  const usd = Number(config.amountUsd || 0);
+  const price = getSolUsd();
+  if (!Number.isFinite(usd) || usd <= 0) {
+    throw new Error("amountUsd must be positive");
   }
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("Set a current SOL_PRICE_USD in environment or solPriceUsd in dashboard config");
+  }
+  return usd / price;
+}
 
-  if (positions.has(data.mint)) return;
+async function buyNewToken(data) {
+  const mint = data.mint;
+  if (!mint || seen.has(mint) || processing.has(mint)) return;
+  seen.add(mint);
+  if (seen.size > 5000) seen.delete(seen.values().next().value);
 
   const token = {
     name: data.name || "N/A",
     symbol: data.symbol || "N/A",
-    mint: data.mint,
+    mint,
     creator: data.traderPublicKey || "N/A",
     signature: data.signature || "N/A",
-    initialBuy: data.initialBuy ?? null,
     marketCapSol: data.marketCapSol ?? null,
-    bondingCurveKey: data.bondingCurveKey || "N/A",
-    detectedAt: Date.now()
+    detectedAt: Date.now(),
+    status: "DETECTED"
   };
 
-  console.log("");
-  console.log("================================");
-  console.log("🆕 NEW TOKEN");
-  console.log("================================");
-  console.log("Name:", token.name);
-  console.log("Symbol:", token.symbol);
-  console.log("Mint:", token.mint);
-  try {
-    await trader.inspectToken(token.mint);
-  } catch (error) {
-    console.log("Token inspection error:", error.message);
-    console.log("⛔ SKIP TOKEN - inspection failed");
+  console.log("NEW TOKEN:", token.symbol, mint);
+  await dashboardToken(token);
+
+  if (!botRunning || config.newTokens === false) return;
+
+  const max = Math.max(1, Number(config.maxOpenPositions || 1));
+  if (positions.size >= max) {
+    console.log("Skipping token: maximum open positions reached");
     return;
   }
 
-  await fetch("http://127.0.0.1:3000/api/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(token)
-  });
+  // Live trading remains locked unless both dashboard switches and
+  // ALLOW_REAL_TRADING=YES are explicitly set.
+  if (config.realBuy !== true || config.realSell !== true ||
+      process.env.ALLOW_REAL_TRADING !== "YES") {
+    console.log("Detection only: BUY/SELL safety switches are OFF.");
+    return;
+  }
 
-  const position = {
-    mint: token.mint,
-    symbol: token.symbol,
-    name: token.name,
-    amountUsd: Number(config.amountUsd || 5),
-    status: "AUTO_BUY",
-    openedAt: Date.now()
-  };
+  processing.add(mint);
+  try {
+    await trader.inspectToken(mint);
+    const sol = amountSol();
 
-  positions.set(token.mint, position);
+    console.log(`BUY request: ${token.symbol}, ${sol} SOL`);
+    const result = await trader.buyToken({
+      mintAddress: mint,
+      solAmount: sol,
+      slippage: Number(config.buySlippagePercent ?? 20),
+      realBuy: true
+    });
 
-  console.log("");
-  console.log("🟢 AUTO BUY");
-  console.log("Token:", token.symbol);
-  console.log("Amount: $" + position.amountUsd);
+    if (!result || result.ok !== true || result.confirmed !== true ||
+        !result.signature) {
+      console.log("BUY not confirmed; no position created.", result);
+      return;
+    }
 
-  await savePosition(position);
+    // Do not pretend to know a reliable entry price from the token-creation
+    // event. TP/SL needs a trustworthy quote source before it can be enabled.
+    const position = {
+      mint,
+      symbol: token.symbol,
+      name: token.name,
+      buySignature: result.signature,
+      tokenAmountRaw: result.tokenAmount,
+      quoteAmountRaw: result.quoteAmount,
+      openedAt: Date.now(),
+      status: "BOUGHT_TP_SL_NOT_ARMED",
+      note: "Entry market quote not verified; automatic TP/SL disabled."
+    };
 
-  startAutomaticSell(token);
+    positions.set(mint, position);
+    await savePosition(position);
+    console.log("BUY CONFIRMED:", token.symbol, result.signature);
+    console.log("WARNING: automatic TP/SL is not armed; monitor this position manually.");
+  } catch (e) {
+    console.log("BUY FAILED:", mint, e.message);
+  } finally {
+    processing.delete(mint);
+  }
 }
 
-function connect() {
+async function connect() {
+  if (connecting) return;
+  connecting = true;
+
+  try {
+    await loadConfig();
+  } catch (e) {
+    console.log("Dashboard config unavailable:", e.message);
+    connecting = false;
+    scheduleReconnect();
+    return;
+  }
+
   ws = new WebSocket(WS_URL);
 
-  ws.on("open", async () => {
-    console.log("");
-    console.log("CONNECTED: YES");
-
-    await loadConfig();
-
-    ws.send(
-      JSON.stringify({
-        method: "subscribeNewToken"
-      })
-    );
-
-    console.log("Subscribed: NEW TOKEN CREATIONS");
-    console.log("Bot running:", botRunning ? "YES" : "NO");
-    console.log("================================");
+  ws.on("open", () => {
+    connecting = false;
+    console.log("Connected to PumpPortal.");
+    ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+    console.log("Subscribed to new token creations.");
   });
 
-  ws.on("message", async (raw) => {
+  ws.on("message", async raw => {
     try {
       const data = JSON.parse(raw.toString());
-
       await loadConfig();
-
-      await handleNewToken(data);
-
-    } catch (error) {
-      console.log("Message error:", error.message);
+      await buyNewToken(data);
+    } catch (e) {
+      console.log("Message handler error:", e.message);
     }
   });
 
-  ws.on("error", (error) => {
-    console.log("WebSocket error:", error.message);
-  });
+  ws.on("error", e => console.log("WebSocket error:", e.message));
 
   ws.on("close", () => {
-    console.log("");
+    connecting = false;
     console.log("WebSocket disconnected.");
-    console.log("Reconnecting in 3 seconds...");
-
-    clearTimeout(reconnectTimer);
-
-    reconnectTimer = setTimeout(() => {
-      connect();
-    }, 3000);
+    scheduleReconnect();
   });
 }
 
-loadConfig().then(() => {
-  connect();
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => connect(), 3000);
+}
+
+process.on("SIGINT", () => {
+  clearTimeout(reconnectTimer);
+  if (ws) ws.close();
+  console.log("Bot stopped.");
+  process.exit(0);
 });
+
+connect();
+
+
+// Controlled SELL helper: only sells an existing tracked position.
+async function sellTrackedPosition(mint) {
+  const position = positions.get(mint);
+
+  if (!position) {
+    console.log("SELL skipped: no tracked position for", mint);
+    return { ok: false, reason: "Position not found" };
+  }
+
+  if (config.realSell !== true || process.env.ALLOW_REAL_TRADING !== "YES") {
+    console.log("SELL blocked: real-sell safety switches are OFF.");
+    return { ok: false, reason: "Safety switches are OFF" };
+  }
+
+  try {
+    console.log("SELL requested for", position.symbol || mint);
+
+    const result = await trader.sellToken({
+      mintAddress: mint,
+      slippage: Number(config.sellSlippagePercent ?? 1),
+      realSell: true
+    });
+
+    if (result?.ok === true && result?.confirmed === true) {
+      positions.delete(mint);
+      await request(`/api/position/${encodeURIComponent(mint)}`, "DELETE");
+      console.log("SELL CONFIRMED:", result.signature);
+      return result;
+    }
+
+    console.log("SELL not confirmed; position retained.", result);
+    return result;
+  } catch (error) {
+    console.error("SELL FAILED:", mint, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+
+let sellPollBusy = false;
+// SELL REQUEST POLLER
+setInterval(async () => {
+  if (sellPollBusy) return;
+  sellPollBusy = true;
+  try {
+    const result = await request("/api/sell-requests");
+    for (const mint of (result.requests || [])) {
+      await sellTrackedPosition(mint);
+    }
+  } catch (e) {
+    console.log("SELL poll error:", e.message);
+  } finally {
+    sellPollBusy = false;
+  }
+}, 750);

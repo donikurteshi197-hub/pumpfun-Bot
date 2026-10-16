@@ -188,6 +188,11 @@ button {
 </div>
 
 <div class="card">
+<h2>Open Positions / SELL</h2>
+<div id="positionsList">No open positions.</div>
+</div>
+
+<div class="card">
 
 <h2>🆕 Latest Token</h2>
 
@@ -325,6 +330,44 @@ async function stopBot() {
 
 }
 
+
+function renderPositions(positions) {
+  const list = document.getElementById("positionsList");
+  list.replaceChildren();
+  const entries = Object.entries(positions || {});
+  if (!entries.length) {
+    list.textContent = "No open positions.";
+    return;
+  }
+  for (const [mint, p] of entries) {
+    const row = document.createElement("div");
+    row.className = "token";
+    const title = document.createElement("strong");
+    title.textContent = (p.symbol || p.name || "Token") + " — " + (p.status || "OPEN");
+    const address = document.createElement("div");
+    address.className = "small";
+    address.textContent = mint;
+    const button = document.createElement("button");
+    button.className = "stop";
+    button.textContent = "SELL TOKEN";
+    button.onclick = () => sellToken(mint);
+    row.append(title, address, button);
+    list.appendChild(row);
+  }
+}
+
+async function sellToken(mint) {
+  if (!confirm("Të kërkoj shitjen e këtij tokeni?")) return;
+  try {
+    const r = await fetch("/api/sell/" + encodeURIComponent(mint), { method: "POST" });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || "SELL failed");
+    alert("Kërkesa SELL u dërgua te boti.");
+  } catch (e) {
+    alert("SELL nuk u nis: " + e.message);
+  }
+}
+
 async function updateState() {
 
   try {
@@ -342,6 +385,7 @@ async function updateState() {
 
     document.getElementById("openPositions").textContent =
       Object.keys(positions).length;
+    renderPositions(positions);
 
     const token =
       state.latestToken;

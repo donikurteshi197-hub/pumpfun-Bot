@@ -22,6 +22,7 @@ const defaultConfig = {
 let config = { ...defaultConfig };
 let latestToken = null;
 let positions = {};
+const sellRequests = [];
 
 if (fs.existsSync(CONFIG_FILE)) {
   try {
@@ -138,6 +139,22 @@ app.delete("/api/position/:mint", (req, res) => {
   delete positions[req.params.mint];
 
   res.json({ ok: true });
+});
+
+app.post("/api/sell/:mint", (req, res) => {
+  const mint = req.params.mint;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint))
+    return res.status(400).json({ ok: false, error: "Invalid mint" });
+  if (!positions[mint])
+    return res.status(404).json({ ok: false, error: "Position not found" });
+  if (sellRequests.includes(mint))
+    return res.status(409).json({ ok: false, error: "Already queued" });
+  sellRequests.push(mint);
+  res.json({ ok: true, queued: true });
+});
+
+app.get("/api/sell-requests", (req, res) => {
+  res.json({ requests: sellRequests.splice(0) });
 });
 
 app.listen(PORT, "0.0.0.0", () => {

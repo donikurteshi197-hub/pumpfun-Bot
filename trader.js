@@ -12,9 +12,16 @@ const {
 const BN = require("bn.js");
 
 const {
+  OnlinePumpAmmSdk,
+  PUMP_AMM_SDK,
+  canonicalPumpPoolPda
+} = require("@pump-fun/pump-swap-sdk");
+
+const {
   OnlinePumpSdk,
   PumpSdk,
-  getBuyTokenAmountFromSolAmount
+  getBuyTokenAmountFromSolAmount,
+  getSellSolAmountFromTokenAmount
 } = require("@pump-fun/pump-sdk");
 
 const RPC_URL = process.env.RPC_URL;
@@ -37,6 +44,7 @@ const connection = new Connection(
 );
 
 const onlineSdk = new OnlinePumpSdk(connection);
+const onlineAmmSdk = new OnlinePumpAmmSdk(connection);
 const pumpSdk = new PumpSdk();
 
 /*
@@ -787,6 +795,147 @@ EXPORTS
 ==================================================
 */
 
+
+async function sellToken({
+  mintAddress,
+  slippage = 1,
+  realSell = false
+}) {
+  if (!realSell) {
+    return { ok: false, skipped: true, reason: "realSell is false" };
+  }
+
+  if (!ALLOW_REAL_TRADING) {
+    return { ok: false, skipped: true, reason: "Trading safety lock is OFF" };
+  }
+
+  if (!Number.isFinite(slippage) || slippage < 0 || slippage > 50) {
+    throw new Error("Invalid slippage percentage");
+  }
+
+  const mint = new PublicKey(mintAddress);
+  const inspected = await inspectToken(mint.toBase58());
+
+  const state = await onlineSdk.fetchSellState(
+    mint, wallet.publicKey, inspected.tokenProgram, inspected.quoteMint
+  );
+
+
+  const accounts = await connection.getParsedTokenAccountsByOwner(
+    wallet.publicKey, { mint }, "confirmed"
+  );
+
+  let rawAmount = 0n;
+  for (const item of accounts.value) {
+    rawAmount += BigInt(item.account.data.parsed.info.tokenAmount.amount);
+  }
+
+  if (rawAmount <= 0n) {
+    throw new Error("No token balance to sell.");
+  }
+
+  const amount = new BN(rawAmount.toString());
+  let instructions;
+
+  if (state.bondingCurve.complete === true) {
+    // Graduated token: sell through its canonical PumpSwap pool.
+    const poolKey = canonicalPumpPoolPda(
+      mint,
+      state.bondingCurve.quoteMint
+    );
+
+    const swapState = await onlineAmmSdk.swapSolanaState(
+      poolKey,
+      wallet.publicKey
+    );
+
+    if (!swapState.pool.baseMint.equals(mint)) {
+      throw new Error("PumpSwap pool base mint mismatch; refusing to sell.");
+    }
+
+    instructions = await PUMP_AMM_SDK.sellBaseInput(
+      swapState,
+      amount,
+      slippage
+    );
+  } else {
+    // Token still on its bonding curve: retain the existing Pump SDK path.
+    const [global, feeConfig] = await Promise.all([
+      onlineSdk.fetchGlobal(),
+      onlineSdk.fetchFeeConfig()
+    ]);
+
+    const quoteAmount = getSellSolAmountFromTokenAmount({
+      global,
+      feeConfig,
+      mintSupply: state.bondingCurve.tokenTotalSupply,
+      bondingCurve: state.bondingCurve,
+      amount
+    });
+
+    if (!quoteAmount || quoteAmount.lte(new BN(0))) {
+      throw new Error("Sell quote is zero.");
+    }
+
+    instructions = await pumpSdk.sellV2Instructions({
+      global,
+      bondingCurveAccountInfo: state.bondingCurveAccountInfo,
+      bondingCurve: state.bondingCurve,
+      mint,
+      user: wallet.publicKey,
+      amount,
+      quoteAmount,
+      slippage,
+      tokenProgram: inspected.tokenProgram,
+      quoteTokenProgram: inspected.quoteTokenProgram
+    });
+  }
+
+  const latest = await connection.getLatestBlockhash("confirmed");
+  const message = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: latest.blockhash,
+    instructions
+  }).compileToV0Message();
+
+  const transaction = new VersionedTransaction(message);
+  transaction.sign([wallet]);
+
+  const simulation = await connection.simulateTransaction(transaction, {
+    sigVerify: true,
+    replaceRecentBlockhash: true
+  });
+
+  if (simulation.value.err) {
+    console.log(simulation.value.logs || []);
+    return { ok: false, sent: false, error: simulation.value.err };
+  }
+
+  const signature = await connection.sendTransaction(transaction, {
+    skipPreflight: false,
+    maxRetries: 3
+  });
+
+  const confirmation = await connection.confirmTransaction({
+    signature,
+    blockhash: latest.blockhash,
+    lastValidBlockHeight: latest.lastValidBlockHeight
+  }, "confirmed");
+
+  if (confirmation.value.err) {
+    return { ok: false, sent: true, signature, error: confirmation.value.err };
+  }
+
+  return {
+    ok: true,
+    sent: true,
+    confirmed: true,
+    signature,
+    tokenAmount: amount.toString(),
+    quoteAmount: quoteAmount.toString()
+  };
+}
+
 module.exports = {
   wallet,
   connection,
@@ -798,7 +947,8 @@ module.exports = {
 
   buildBuyTransaction,
   simulateBuy,
-  buyToken
+  buyToken,
+  sellToken
 };
 
 
