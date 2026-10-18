@@ -38,9 +38,51 @@ const secret = Uint8Array.from(
 
 const wallet = Keypair.fromSecretKey(secret);
 
+let rpcQueue = Promise.resolve();
+let lastRpcStart = 0;
+
+async function fetchWith429Retry(url, options) {
+  const run = async () => {
+    const maxRetries = 5;
+
+    for (let attempt = 0; ; attempt++) {
+      const waitMs = Math.max(0, 200 - (Date.now() - lastRpcStart));
+      if (waitMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+      }
+
+      lastRpcStart = Date.now();
+      const response = await fetch(url, options);
+
+      if (response.status !== 429 || attempt >= maxRetries) {
+        return response;
+      }
+
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delayMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 30000)
+        : Math.min(1000 * (2 ** attempt), 30000);
+
+      console.log(
+        `Helius RPC HTTP 429; retry ${attempt + 1}/${maxRetries} after ${delayMs}ms`
+      );
+
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  };
+
+  const request = rpcQueue.then(run, run);
+  rpcQueue = request.then(() => undefined, () => undefined);
+  return request;
+}
+
 const connection = new Connection(
   RPC_URL,
-  "confirmed"
+  {
+    commitment: "confirmed",
+    fetch: fetchWith429Retry,
+    disableRetryOnRateLimit: true
+  }
 );
 
 const onlineSdk = new OnlinePumpSdk(connection);
@@ -289,6 +331,15 @@ async function buildBuyTransaction(
     onlineSdk.fetchFeeConfig(),
     inspectToken(mint.toBase58())
   ]);
+
+  // MAYHEM-ONLY BUY FILTER
+  if (state.bondingCurve?.isMayhemMode !== true) {
+    throw new Error(
+      "MAYHEM FILTER: token is not confirmed as Mayhem Mode; buy blocked."
+    );
+  }
+
+  console.log("MAYHEM FILTER: CONFIRMED");
 
   /*
   Bonding curve token supply is used
@@ -640,17 +691,18 @@ async function buyToken({
       wallet.publicKey
     );
 
-  const lamports =
-    Math.floor(
-      solAmount * 1_000_000_000
-    );
+  const lamports = Math.floor(solAmount * 1_000_000_000);
+  const reserveLamports = Math.floor(
+    Number(process.env.SOL_RESERVE ?? 0.02) * 1_000_000_000
+  );
 
-  if (
-    balance <
-    lamports
-  ) {
+  if (!Number.isFinite(solAmount) || solAmount <= 0) {
+    throw new Error("Invalid SOL buy amount.");
+  }
+
+  if (balance < lamports + reserveLamports) {
     throw new Error(
-      `Insufficient SOL. Balance=${balance / 1e9} SOL, requested=${solAmount} SOL`
+      `Insufficient SOL after reserve. Balance=${balance / 1e9} SOL, requested=${solAmount} SOL, reserve=${reserveLamports / 1e9} SOL`
     );
   }
 
@@ -677,7 +729,7 @@ async function buyToken({
     await connection.simulateTransaction(
       result.transaction,
       {
-        sigVerify: true,
+        sigVerify: false,
         replaceRecentBlockhash: true
       }
     );
@@ -796,11 +848,11 @@ EXPORTS
 */
 
 
-async function sellToken({
+async function sellToken(
   mintAddress,
   slippage = 1,
   realSell = false
-}) {
+) {
   if (!realSell) {
     return { ok: false, skipped: true, reason: "realSell is false" };
   }
@@ -836,6 +888,7 @@ async function sellToken({
 
   const amount = new BN(rawAmount.toString());
   let instructions;
+  let quoteAmount = null;
 
   if (state.bondingCurve.complete === true) {
     // Graduated token: sell through its canonical PumpSwap pool.
@@ -853,11 +906,18 @@ async function sellToken({
       throw new Error("PumpSwap pool base mint mismatch; refusing to sell.");
     }
 
+    // PumpSwap SDK builds the actual sell instructions here.
     instructions = await PUMP_AMM_SDK.sellBaseInput(
       swapState,
       amount,
       slippage
     );
+
+    // Quote is the estimated minimum output in the pool's quote units.
+    // Keep this separate from the bonding-curve quote path.
+    const poolQuote = swapState.pool.quoteMint.toBase58();
+    console.log("PumpSwap sell quote mint:", poolQuote);
+    console.log("PumpSwap sell instructions:", instructions.length);
   } else {
     // Token still on its bonding curve: retain the existing Pump SDK path.
     const [global, feeConfig] = await Promise.all([
@@ -865,7 +925,7 @@ async function sellToken({
       onlineSdk.fetchFeeConfig()
     ]);
 
-    const quoteAmount = getSellSolAmountFromTokenAmount({
+    quoteAmount = getSellSolAmountFromTokenAmount({
       global,
       feeConfig,
       mintSupply: state.bondingCurve.tokenTotalSupply,
@@ -902,7 +962,7 @@ async function sellToken({
   transaction.sign([wallet]);
 
   const simulation = await connection.simulateTransaction(transaction, {
-    sigVerify: true,
+    sigVerify: false,
     replaceRecentBlockhash: true
   });
 
@@ -932,7 +992,7 @@ async function sellToken({
     confirmed: true,
     signature,
     tokenAmount: amount.toString(),
-    quoteAmount: quoteAmount.toString()
+    quoteAmount: quoteAmount ? quoteAmount.toString() : null
   };
 }
 
