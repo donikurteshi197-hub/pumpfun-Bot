@@ -6,22 +6,43 @@ const app = express();
 const PORT = 3000;
 
 const CONFIG_FILE = path.join(__dirname, "runtime-config.json");
+const POSITIONS_FILE = path.join(__dirname, "positions.json");
 
 const defaultConfig = {
   botRunning: false,
-  amountUsd: 5,
+  amountUsd: 1,
+  buyAmountSol: 0.05,
   holdSeconds: 30,
+  targetProfitUsd: 0.50,
+  stopLossUsd: 0.10,
   takeProfitPercent: 50,
   stopLossPercent: 10,
-  maxOpenPositions: 10,
+  maxOpenPositions: 3,
   newTokens: true,
   realBuy: false,
-  realSell: false
+  realSell: false,
+  paperTrading: true
 };
 
 let config = { ...defaultConfig };
 let latestToken = null;
 let positions = {};
+
+try {
+  if (fs.existsSync(POSITIONS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf8"));
+    if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+      positions = saved;
+    }
+  }
+} catch (error) {
+  console.error("Could not load saved positions:", error.message);
+}
+
+function persistPositions() {
+  fs.writeFileSync(POSITIONS_FILE, JSON.stringify(positions, null, 2));
+}
+
 const sellRequests = [];
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -129,6 +150,13 @@ app.post("/api/position", (req, res) => {
     openedAt: position.openedAt || Date.now()
   };
 
+  try {
+    persistPositions();
+  } catch (error) {
+    console.error("Could not save position:", error.message);
+    return res.status(500).json({ ok: false, error: "Could not save position" });
+  }
+
   res.json({
     ok: true,
     position: positions[position.mint]
@@ -136,7 +164,17 @@ app.post("/api/position", (req, res) => {
 });
 
 app.delete("/api/position/:mint", (req, res) => {
-  delete positions[req.params.mint];
+  const mint = req.params.mint;
+  const previous = positions[mint];
+  delete positions[mint];
+
+  try {
+    persistPositions();
+  } catch (error) {
+    if (previous) positions[mint] = previous;
+    console.error("Could not save position removal:", error.message);
+    return res.status(500).json({ ok: false, error: "Could not save position removal" });
+  }
 
   res.json({ ok: true });
 });

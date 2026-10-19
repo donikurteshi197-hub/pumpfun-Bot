@@ -139,7 +139,7 @@ async function buyNewToken(data) {
   };
 
   console.log("NEW TOKEN:", token.symbol, mint);
-  await dashboardToken(token);
+  void dashboardToken(token);
 
   if (!botRunning || config.newTokens === false) {
     console.log("BUY SKIPPED: botRunning =", botRunning, "| newTokens =", config.newTokens);
@@ -227,13 +227,7 @@ async function buyNewToken(data) {
     return;
   }
 
-  if (liveBuyInProgress) {
-    console.log("BUY SKIPPED: another live buy is already in progress:", mint);
-    return;
-  }
-
   seen.add(mint);
-  liveBuyInProgress = true;
   processing.add(mint);
   try {
     const sol = await amountSol();
@@ -289,7 +283,6 @@ async function buyNewToken(data) {
     console.log("BUY FAILED:", mint, e.message);
   } finally {
     processing.delete(mint);
-    liveBuyInProgress = false;
   }
 }
 

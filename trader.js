@@ -178,14 +178,15 @@ async function inspectToken(mintAddress) {
 
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
+      const tokenProgram =
+        await getTokenProgram(mint);
+
       const state =
         await onlineSdk.fetchBuyState(
           mint,
-          wallet.publicKey
+          wallet.publicKey,
+          tokenProgram
         );
-
-      const tokenProgram =
-        await getTokenProgram(mint);
 
       console.log("");
       console.log("================================");
