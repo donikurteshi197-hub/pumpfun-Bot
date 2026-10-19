@@ -80,16 +80,43 @@ async function removePosition(mint) {
   }
 }
 
-function getSolUsd() {
-  return Number(config.solPriceUsd || process.env.SOL_PRICE_USD || 0);
+async function getSolUsd() {
+  const response = await fetch(
+    "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+    { signal: AbortSignal.timeout(5000) }
+  );
+
+  if (!response.ok) {
+    throw new Error(`SOL price API failed: HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  const price = Number(data?.solana?.usd);
+
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("SOL price API returned an invalid price");
+  }
+
+  return price;
 }
 
-function amountSol() {
-  const sol = Number(config.buyAmountSol);
+async function amountSol() {
+  const usd = Number(config.amountUsd);
+
+  if (!Number.isFinite(usd) || usd <= 0) {
+    throw new Error("BUY BLOCKED: amountUsd must be greater than zero");
+  }
+
+  const solPrice = await getSolUsd();
+  const sol = usd / solPrice;
 
   if (!Number.isFinite(sol) || sol <= 0) {
-    throw new Error("Set a valid buyAmountSol in dashboard first");
+    throw new Error("BUY BLOCKED: USD to SOL conversion failed");
   }
+
+  console.log(
+    `BUY AMOUNT: $${usd.toFixed(2)} / SOL $${solPrice.toFixed(2)} = ${sol.toFixed(8)} SOL`
+  );
 
   return sol;
 }
@@ -170,6 +197,8 @@ async function buyNewToken(data) {
       quoteAmountRaw: "0",
       entryMarketCapSol: entry,
       currentMarketCapSol: entry,
+      investmentUsd: Number(config.amountUsd ?? 1),
+      estimatedPnlUsd: 0,
       openedAt: Date.now(),
       status: "PAPER_TP_SL_ARMED",
       simulated: true,
@@ -207,7 +236,7 @@ async function buyNewToken(data) {
   liveBuyInProgress = true;
   processing.add(mint);
   try {
-    const sol = amountSol();
+    const sol = await amountSol();
 
     console.log(`BUY request: ${token.symbol}, ${sol} SOL`);
     const result = await trader.buyToken({
@@ -326,22 +355,45 @@ async function handleTradeUpdate(data) {
 
   const changePercent = ((marketCapSol / entry) - 1) * 100;
   position.changePercent = Number(changePercent.toFixed(2));
+
+  // Paper P/L estimate based on market-cap movement, not an execution price.
+  const investmentUsd = Number(position.investmentUsd ?? config.amountUsd ?? 1);
+  const estimatedPnlUsd = investmentUsd * changePercent / 100;
+  position.estimatedPnlUsd = Number(estimatedPnlUsd.toFixed(4));
   await savePosition(position);
 
   console.log(
     "POSITION UPDATE:",
     position.symbol || mint,
     "market cap:", marketCapSol,
-    "SOL, P/L estimate:", position.changePercent + "%"
+    "SOL, P/L estimate:", position.changePercent + "%",
+    "($" + position.estimatedPnlUsd.toFixed(2) + ")"
   );
 
-  const takeProfit = Number(config.takeProfitPercent ?? 50);
-  const stopLoss = Number(config.stopLossPercent ?? 10);
-  const hitTP = Number.isFinite(takeProfit) && takeProfit > 0 && changePercent >= takeProfit;
-  const hitSL = Number.isFinite(stopLoss) && stopLoss > 0 && changePercent <= -stopLoss;
+  let hitTP = false;
+  let hitSL = false;
+
+  if (position.simulated === true) {
+    const targetProfitUsd = Number(config.targetProfitUsd ?? 0.50);
+    const stopLossUsd = Number(config.stopLossUsd ?? 0.10);
+    hitTP = Number.isFinite(targetProfitUsd) && targetProfitUsd > 0 && estimatedPnlUsd >= targetProfitUsd;
+    hitSL = Number.isFinite(stopLossUsd) && stopLossUsd > 0 && estimatedPnlUsd <= -stopLossUsd;
+  } else {
+    const takeProfit = Number(config.takeProfitPercent ?? 50);
+    const stopLoss = Number(config.stopLossPercent ?? 10);
+    hitTP = Number.isFinite(takeProfit) && takeProfit > 0 && changePercent >= takeProfit;
+    hitSL = Number.isFinite(stopLoss) && stopLoss > 0 && changePercent <= -stopLoss;
+  }
 
   if ((hitTP || hitSL) && !exiting.has(mint)) {
-    console.log("AUTOMATIC EXIT TRIGGER:", hitTP ? "TAKE PROFIT" : "STOP LOSS", position.symbol || mint);
+    console.log(
+      "AUTOMATIC EXIT TRIGGER:",
+      hitTP ? "TAKE PROFIT" : "STOP LOSS",
+      position.symbol || mint,
+      position.simulated === true
+        ? "estimated P/L: $" + estimatedPnlUsd.toFixed(2)
+        : "change: " + changePercent.toFixed(2) + "%"
+    );
     await sellTrackedPosition(mint);
   }
 }
@@ -475,7 +527,11 @@ async function sellTrackedPosition(mint) {
 
     exiting.add(mint);
     try {
-      console.log("PAPER SELL:", position.symbol || mint, "| simulated exit");
+      console.log(
+        "PAPER SELL:", position.symbol || mint,
+        "| estimated P/L: $" + Number(position.estimatedPnlUsd ?? 0).toFixed(2),
+        "| simulated exit only"
+      );
       positions.delete(mint);
       const timer = exitTimers.get(mint);
       if (timer) clearTimeout(timer);
