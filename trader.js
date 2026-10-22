@@ -694,7 +694,7 @@ async function buyToken({
 
   const lamports = Math.floor(solAmount * 1_000_000_000);
   const reserveLamports = Math.floor(
-    Number(process.env.SOL_RESERVE ?? 0.02) * 1_000_000_000
+    Number(process.env.SOL_RESERVE ?? 0.002) * 1_000_000_000
   );
 
   if (!Number.isFinite(solAmount) || solAmount <= 0) {
@@ -731,6 +731,7 @@ async function buyToken({
       result.transaction,
       {
         sigVerify: false,
+
         replaceRecentBlockhash: true
       }
     );
@@ -997,6 +998,94 @@ async function sellToken(
   };
 }
 
+
+async function getTokenMarketCapSol(mintAddress) {
+  const mint = new PublicKey(mintAddress);
+  const tokenProgram = await getTokenProgram(mint);
+  const state = await onlineSdk.fetchBuyState(
+    mint,
+    wallet.publicKey,
+    tokenProgram
+  );
+
+  const curve = state.bondingCurve;
+  if (!curve || curve.isMayhemMode !== true) {
+    throw new Error("PRICE BLOCKED: token is not verified as Mayhem");
+  }
+
+  const supplyRaw = Number(curve.tokenTotalSupply.toString());
+  if (!Number.isFinite(supplyRaw) || supplyRaw <= 0) {
+    throw new Error("PRICE UNAVAILABLE: invalid token supply");
+  }
+
+  const solQuoteMints = new Set([
+    "11111111111111111111111111111111",
+    "So11111111111111111111111111111111111111112"
+  ]);
+
+  if (curve.complete !== true) {
+    const quoteMint = curve.quoteMint?.toBase58?.()
+      || state.quoteMint?.toBase58?.();
+
+    if (!solQuoteMints.has(quoteMint)) {
+      throw new Error("PRICE UNAVAILABLE: bonding curve quote is not SOL");
+    }
+
+    const virtualTokenRaw = Number(curve.virtualTokenReserves.toString());
+    const virtualQuoteRaw = Number(curve.virtualQuoteReserves.toString());
+
+    if (
+      !Number.isFinite(virtualTokenRaw) || virtualTokenRaw <= 0 ||
+      !Number.isFinite(virtualQuoteRaw) || virtualQuoteRaw <= 0
+    ) {
+      throw new Error("PRICE UNAVAILABLE: invalid bonding curve reserves");
+    }
+
+    const marketCapSol =
+      (virtualQuoteRaw / 1e9) * (supplyRaw / virtualTokenRaw);
+
+    if (!Number.isFinite(marketCapSol) || marketCapSol <= 0) {
+      throw new Error("PRICE UNAVAILABLE: invalid market cap");
+    }
+    return marketCapSol;
+  }
+
+  const poolKey = canonicalPumpPoolPda(mint, curve.quoteMint);
+  const swapState = await onlineAmmSdk.swapSolanaState(
+    poolKey,
+    wallet.publicKey
+  );
+
+  if (
+    !swapState.pool.baseMint.equals(mint) ||
+    swapState.pool.isMayhemMode !== true
+  ) {
+    throw new Error("PRICE BLOCKED: PumpSwap pool is not the expected Mayhem token");
+  }
+
+  if (!solQuoteMints.has(swapState.pool.quoteMint.toBase58())) {
+    throw new Error("PRICE UNAVAILABLE: PumpSwap quote is not SOL");
+  }
+
+  const baseRaw = Number(swapState.poolBaseAmount.toString());
+  const quoteRaw = Number(swapState.poolQuoteAmount.toString());
+
+  if (
+    !Number.isFinite(baseRaw) || baseRaw <= 0 ||
+    !Number.isFinite(quoteRaw) || quoteRaw <= 0
+  ) {
+    throw new Error("PRICE UNAVAILABLE: invalid PumpSwap reserves");
+  }
+
+  const marketCapSol = (quoteRaw / 1e9) * (supplyRaw / baseRaw);
+
+  if (!Number.isFinite(marketCapSol) || marketCapSol <= 0) {
+    throw new Error("PRICE UNAVAILABLE: invalid PumpSwap market cap");
+  }
+
+  return marketCapSol;
+}
+
 module.exports = {
   wallet,
   connection,
@@ -1005,6 +1094,7 @@ module.exports = {
 
   checkWallet,
   inspectToken,
+  getTokenMarketCapSol,
 
   buildBuyTransaction,
   simulateBuy,

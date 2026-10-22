@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="sq">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solana Sniper Bot</title>
+<style>
+:root{color-scheme:dark;--bg:#0a0d14;--panel:#121824;--line:#263144;--muted:#93a2b8;--text:#edf3ff;--green:#35d49a;--red:#ff647c;--blue:#719cff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,Segoe UI,sans-serif}
+main{max-width:1180px;margin:auto;padding:28px 18px 50px}.top{display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;margin-bottom:22px}
+h1{font-size:26px;margin:0;letter-spacing:-.5px}h2{font-size:16px;margin:0 0 17px}.sub,.muted{color:var(--muted)}.sub{margin-top:4px}
+.pill{border:1px solid var(--line);padding:7px 12px;border-radius:30px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:15px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:19px;min-width:0}
+.settings{grid-column:span 4}.stats{grid-column:span 8}.wide{grid-column:span 12}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat{padding:15px;background:#0c121d;border:1px solid var(--line);border-radius:12px}.stat span{display:block;color:var(--muted);font-size:12px}.stat strong{display:block;font-size:21px;margin-top:5px;overflow-wrap:anywhere}
+label{display:block;color:#bdc9da;font-size:12px;margin:12px 0 5px}input{width:100%;padding:10px 11px;background:#0b111b;border:1px solid #303c50;border-radius:8px;color:var(--text);font:inherit}
+.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:17px}button{border:0;border-radius:9px;padding:10px 15px;font-weight:700;cursor:pointer;color:#07120f;background:var(--green)}button.stop{background:#39202a;color:#ff9aaa}button.secondary{background:#26344b;color:#dce7ff}button:disabled{opacity:.45;cursor:not-allowed}
+.notice{margin-top:13px;color:var(--muted);font-size:12px}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;min-width:600px}th,td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--line);font-size:12px}th{color:var(--muted);font-weight:500}
+#logs{max-height:290px;overflow:auto;font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.good{color:var(--green)}.bad{color:var(--red)}.empty{color:var(--muted);padding:16px 0}
+@media(max-width:850px){.settings,.stats{grid-column:span 12}}@media(max-width:520px){main{padding:18px 12px}.cards{grid-template-columns:1fr}.panel{padding:15px}h1{font-size:22px}}
+</style>
+</head>
+<body>
+<main>
+<header class="top">
+  <div><h1>⚡ Solana Sniper Bot</h1><div class="sub">Pump.fun · Mayhem Direct</div></div>
+  <div class="pill" id="status">● Ndalur</div>
+</header>
+<div class="grid">
+<section class="panel settings">
+<h2>Konfigurimi</h2>
+<form id="settings">
+<label for="buyAmountSol">Blerja (SOL)</label><input id="buyAmountSol" type="number" min=".001" max="100" step=".001" value=".01" required>
+<label for="takeProfitPercent">Take profit (%)</label><input id="takeProfitPercent" type="number" min=".1" max="10000" step=".1" value="50" required>
+<label for="stopLossPercent">Stop loss (%)</label><input id="stopLossPercent" type="number" min=".1" max="100" step=".1" value="10" required>
+<label for="holdSeconds">Koha e mbajtjes (sekonda)</label><input id="holdSeconds" type="number" min="1" max="86400" step="1" value="30" required>
+<label for="maxOpenPositions">Pozicione maksimale</label><input id="maxOpenPositions" type="number" min="1" max="50" step="1" value="3" required>
+<label for="slippagePercent">Slippage (%)</label><input id="slippagePercent" type="number" min="0" max="100" step=".5" value="20" required>
+<div class="actions"><button type="submit" class="secondary">Ruaj konfigurimin</button></div>
+</form>
+<div class="actions"><button id="start">START BOT</button><button id="stop" class="stop">STOP BOT</button></div>
+<div class="notice">Live trading: <strong id="live">OFF</strong>. Ky panel nuk aktivizon tregtim real automatikisht.</div>
+<div id="message" class="notice">Duke lidhur dashboard-in…</div>
+</section>
+<section class="panel stats">
+<h2>Gjendja e botit</h2>
+<div class="cards">
+<div class="stat"><span>Procesi</span><strong id="process">Ndalur</strong></div>
+<div class="stat"><span>Pozicione aktive</span><strong id="positions">—</strong></div>
+<div class="stat"><span>PnL</span><strong id="pnl">—</strong></div>
+</div>
+<p class="notice">Çmimi, PnL dhe pozicionet shfaqen kur lidhja e tregtimit të jetë implementuar dhe verifikuar.</p>
+</section>
+<section class="panel wide">
+<h2>Pozicionet aktive</h2><div class="scroll"><table><thead><tr><th>Token</th><th>Mint</th><th>Çmimi hyrës</th><th>Çmimi aktual</th><th>PnL</th><th>Koha</th></tr></thead><tbody id="positionsTable"><tr><td colspan="6" class="muted">Nuk ka të dhëna tregtimi ende.</td></tr></tbody></table></div>
+</section>
+<section class="panel wide">
+<h2>Historiku / Log-et</h2><div id="logs">Duke pritur log-et…</div>
+</section>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const fields=["buyAmountSol","takeProfitPercent","stopLossPercent","holdSeconds","maxOpenPositions","slippagePercent"];
+let configLoaded=false;
+async function request(url,body){
+ const r=await fetch(url,{method:body?"POST":"GET",headers:body?{"Content-Type":"application/json"}:{},body:body?JSON.stringify(body):undefined});
+ const data=await r.json();if(!r.ok||data.ok===false)throw new Error(data.error||"Kërkesa dështoi");return data;
+}
+function message(s,bad=false){$("message").textContent=s;$("message").className="notice "+(bad?"bad":"good")}
+async function refresh(){
+ try{
+  const d=await request("/api/status");
+  if(!configLoaded){fields.forEach(k=>$(k).value=d.config[k]);configLoaded=true}
+  $("status").textContent=d.bot.running?"● Boti aktiv":"● Ndalur";
+  $("status").style.color=d.bot.running?"var(--green)":"var(--muted)";
+  $("process").textContent=d.bot.running?"Aktiv":d.bot.starting?"Duke u nisur":"Ndalur";
+  $("live").textContent=d.config.liveTrading?"ON":"OFF";
+  $("logs").textContent=(d.history||[]).map(x=>`${new Date(x.time).toLocaleTimeString()} [${x.level}] ${x.message}`).join("\n")||"Ende pa log-e.";
+ }catch(e){message("Gabim lidhjeje: "+e.message,true)}
+}
+$("settings").addEventListener("submit",async e=>{
+ e.preventDefault();try{
+  const body={};fields.forEach(k=>body[k]=Number($(k).value));
+  await request("/api/config",body);message("Konfigurimi u ruajt.");
+ }catch(err){message(err.message,true)}
+});
+$("start").addEventListener("click",async()=>{try{const d=await request("/api/start",{});message(d.message)}catch(e){message(e.message,true)}refresh()});
+$("stop").addEventListener("click",async()=>{try{const d=await request("/api/stop",{});message(d.message)}catch(e){message(e.message,true)}refresh()});
+refresh();setInterval(refresh,2000);
+</script>
+</body>
+</html>

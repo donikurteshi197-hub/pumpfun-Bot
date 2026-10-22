@@ -1,11 +1,16 @@
 {
   "botRunning": true,
-  "amountUsd": 5,
-  "holdSeconds": 30,
+  "amountUsd": 0.5,
+  "buyAmountSol": 0.016,
+  "holdSeconds": 79,
+  "targetProfitUsd": 0.5,
+  "stopLossUsd": 0.1,
   "takeProfitPercent": 50,
   "stopLossPercent": 10,
-  "maxOpenPositions": 50,
+  "maxOpenPositions": 1,
   "newTokens": true,
-  "realBuy": false,
-  "realSell": false
+  "realBuy": true,
+  "realSell": true,
+  "paperTrading": false,
+  "sellSlippagePercent": 1
 }

@@ -6,10 +6,15 @@ require("dotenv").config();
 const WebSocket = require("ws");
 const http = require("http");
 const trader = require("./trader.js");
+const { Connection, PublicKey } = require("@solana/web3.js");
 
-const WS_URL = process.env.PUMPPORTAL_API_KEY
-  ? `wss://pumpportal.fun/api/data?api-key=${encodeURIComponent(process.env.PUMPPORTAL_API_KEY)}`
-  : "wss://pumpportal.fun/api/data";
+const RPC_URL = process.env.RPC_URL;
+const PUMP_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+const PUMP_PROGRAM = new PublicKey(PUMP_PROGRAM_ID);
+const onchainSeen = new Set();
+let onChainConnection = null;
+let onchainListenerStarted = false;
+
 const SERVER = "http://127.0.0.1:3000";
 
 let ws;
@@ -24,6 +29,18 @@ let liveBuyInProgress = false;
 const seen = new Set();
 const exiting = new Set();
 const exitTimers = new Map();
+const priceMonitorTimers = new Map();
+const priceMonitorBusy = new Set();
+const priceMonitorLastError = new Map();
+
+// Serialize Mayhem checks to reduce RPC bursts and HTTP 429 errors.
+let mayhemCheckQueue = Promise.resolve();
+
+function inspectTokenQueued(mint) {
+  const task = mayhemCheckQueue.then(() => trader.inspectToken(mint));
+  mayhemCheckQueue = task.catch(() => {});
+  return task;
+}
 
 function request(path, method = "GET", body = null) {
   return new Promise((resolve, reject) => {
@@ -72,6 +89,11 @@ async function savePosition(position) {
 }
 
 async function removePosition(mint) {
+  const priceTimer = priceMonitorTimers.get(mint);
+  if (priceTimer) clearInterval(priceTimer);
+  priceMonitorTimers.delete(mint);
+  priceMonitorBusy.delete(mint);
+  priceMonitorLastError.delete(mint);
   positions.delete(mint);
   try {
     await request(`/api/position/${encodeURIComponent(mint)}`, "DELETE");
@@ -123,8 +145,8 @@ async function amountSol() {
 
 async function buyNewToken(data) {
   const mint = data.mint;
-  if (!mint || processing.has(mint)) return;
-  if (seen.has(mint)) return;
+  if (!mint || processing.has(mint) || seen.has(mint)) return;
+  seen.add(mint);
   if (seen.size > 5000) seen.delete(seen.values().next().value);
 
   const token = {
@@ -146,27 +168,45 @@ async function buyNewToken(data) {
     return;
   }
 
-  // MAYHEM-ONLY FILTER: before paper or live trading.
-  try {
-    const mayhemState = await trader.inspectToken(mint);
+  // MAYHEM-ONLY FILTER: retry transient RPC/bonding-curve errors.
+  let mayhemState = null;
+  let mayhemError = null;
 
-    if (mayhemState?.bondingCurve?.isMayhemMode !== true) {
-      token.status = "SKIPPED_NON_MAYHEM";
-      await dashboardToken(token);
-      console.log("MAYHEM FILTER: ordinary token skipped:", token.symbol, mint);
-      return;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      mayhemState = await inspectTokenQueued(mint);
+      mayhemError = null;
+      break;
+    } catch (error) {
+      mayhemError = error;
+      console.log(
+        `MAYHEM CHECK RETRY ${attempt}/3:`,
+        token.symbol, mint, "|", error.message
+      );
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, attempt * 500));
+      }
     }
+  }
 
-    console.log("MAYHEM FILTER: CONFIRMED", token.symbol, mint);
-  } catch (error) {
+  if (mayhemError) {
     token.status = "SKIPPED_MAYHEM_UNCONFIRMED";
     await dashboardToken(token);
     console.log(
-      "MAYHEM CHECK FAILED; token skipped:",
-      token.symbol, mint, "|", error.message
+      "MAYHEM CHECK FAILED AFTER RETRIES; token skipped:",
+      token.symbol, mint, "|", mayhemError.message
     );
     return;
   }
+
+  if (mayhemState?.bondingCurve?.isMayhemMode !== true) {
+    token.status = "SKIPPED_NON_MAYHEM";
+    await dashboardToken(token);
+    console.log("MAYHEM FILTER: ordinary token skipped:", token.symbol, mint);
+    return;
+  }
+
+  console.log("MAYHEM FILTER: CONFIRMED", token.symbol, mint);
 
   const max = Math.max(1, Number(config.maxOpenPositions || 1));
   if (positions.size >= max) {
@@ -176,7 +216,29 @@ async function buyNewToken(data) {
 
   // PAPER MODE: simulate a position without sending a blockchain transaction.
   if (config.paperTrading === true) {
-    const entry = Number(data.marketCapSol);
+    let entry = Number(data.marketCapSol);
+
+    // Derive entry market cap for direct on-chain detections.
+    if (!Number.isFinite(entry) || entry <= 0) {
+      const curve = mayhemState?.bondingCurve;
+      const quote = Number(curve?.virtualQuoteReserves?.toString?.() ?? curve?.virtualQuoteReserves);
+      const tokens = Number(curve?.virtualTokenReserves?.toString?.() ?? curve?.virtualTokenReserves);
+      const supply = Number(curve?.tokenTotalSupply?.toString?.() ?? curve?.tokenTotalSupply);
+
+      if (
+        Number.isFinite(quote) && quote > 0 &&
+        Number.isFinite(tokens) && tokens > 0 &&
+        Number.isFinite(supply) && supply > 0
+      ) {
+        entry = (quote / tokens) * supply / 1e9;
+        if (Number.isFinite(entry) && entry > 0) {
+          token.marketCapSol = entry;
+          console.log("PAPER ENTRY: market cap derived from bonding curve:", entry.toFixed(6), "SOL");
+          await dashboardToken(token);
+        }
+      }
+    }
+
     if (!Number.isFinite(entry) || entry <= 0) {
       console.log("PAPER BUY SKIPPED: token has no valid marketCapSol:", mint);
       return;
@@ -216,13 +278,11 @@ async function buyNewToken(data) {
   // Live trading remains locked unless both dashboard switches and
   // ALLOW_REAL_TRADING=YES are explicitly set.
   if (config.realBuy !== true || config.realSell !== true ||
-      process.env.ALLOW_REAL_TRADING !== "YES" ||
-      !process.env.PUMPPORTAL_API_KEY) {
+      process.env.ALLOW_REAL_TRADING !== "YES") {
     console.log("BUY BLOCKED:", JSON.stringify({
       realBuy: config.realBuy === true,
       realSell: config.realSell === true,
-      allowRealTrading: process.env.ALLOW_REAL_TRADING === "YES",
-      pumpPortalKeyPresent: Boolean(process.env.PUMPPORTAL_API_KEY)
+      allowRealTrading: process.env.ALLOW_REAL_TRADING === "YES"
     }));
     return;
   }
@@ -318,14 +378,44 @@ function armTimeExit(mint, retry = false) {
 }
 
 function subscribePositionTrades(mint) {
-  if (!process.env.PUMPPORTAL_API_KEY) {
-    console.log("TP/SL feed unavailable: set PUMPPORTAL_API_KEY in .env.");
-    return;
-  }
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ method: "subscribeTokenTrade", keys: [mint] }));
-    console.log("Subscribed to token trades for TP/SL:", mint);
-  }
+  if (priceMonitorTimers.has(mint)) return;
+
+  console.log("DIRECT ON-CHAIN TP/SL MONITOR:", mint);
+
+  const pollPrice = async () => {
+    if (!positions.has(mint)) {
+      const timer = priceMonitorTimers.get(mint);
+      if (timer) clearInterval(timer);
+      priceMonitorTimers.delete(mint);
+      return;
+    }
+
+    if (priceMonitorBusy.has(mint)) return;
+    priceMonitorBusy.add(mint);
+
+    try {
+      const marketCapSol = await trader.getTokenMarketCapSol(mint);
+      priceMonitorLastError.delete(mint);
+      await handleTradeUpdate({ mint, marketCapSol });
+    } catch (error) {
+      const now = Date.now();
+      const last = priceMonitorLastError.get(mint) || 0;
+      if (now - last >= 15000) {
+        console.log(
+          "DIRECT PRICE TEMPORARILY UNAVAILABLE:",
+          mint,
+          error.message
+        );
+        priceMonitorLastError.set(mint, now);
+      }
+    } finally {
+      priceMonitorBusy.delete(mint);
+    }
+  };
+
+  pollPrice();
+  const timer = setInterval(pollPrice, 2000);
+  priceMonitorTimers.set(mint, timer);
 }
 
 async function handleTradeUpdate(data) {
@@ -418,54 +508,130 @@ async function restoreSavedPositions() {
   }
 }
 
+
+async function inspectOnChainCreation(event) {
+  const signature = event?.signature;
+  if (!signature || onchainSeen.has(signature)) return;
+
+  onchainSeen.add(signature);
+  if (onchainSeen.size > 5000) {
+    onchainSeen.delete(onchainSeen.values().next().value);
+  }
+
+  if (event.err) return;
+  if (!event.logs?.some(line => /Instruction:\s*Create(?:V2)?\b/i.test(line))) return;
+
+  try {
+    const tx = await onChainConnection.getParsedTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 1
+    });
+
+    if (!tx || tx.meta?.err) return;
+
+    const instructions = [
+      ...(tx.transaction.message.instructions || []),
+      ...(tx.meta.innerInstructions || []).flatMap(group => group.instructions || [])
+    ];
+
+    for (const ix of instructions) {
+      if (String(ix.programId) !== PUMP_PROGRAM_ID) continue;
+
+      const firstAccount = ix.accounts?.[0];
+      const mint = firstAccount?.toBase58
+        ? firstAccount.toBase58()
+        : String(firstAccount || "");
+
+      if (!mint) continue;
+
+      try {
+        new PublicKey(mint);
+      } catch {
+        continue;
+      }
+
+      console.log("ON-CHAIN PUMP.FUN CREATE:", mint);
+      console.log("CREATE SIGNATURE:", signature);
+
+      // Skaneri zbulon tokenin; marketCap nuk shpiket.
+      // PumpPortal mund të sjellë më pas të dhënat e tregut.
+      // PumpPortal supplies token metadata to buyNewToken().
+      // Do not process the same creation twice from the on-chain listener.
+      console.log("DIRECT ON-CHAIN DETECTION:", mint);
+      await buyNewToken({
+        mint,
+        signature,
+        name: "Mayhem token",
+        symbol: mint.slice(0, 6),
+        marketCapSol: null
+      });
+      return;
+    }
+  } catch (error) {
+    console.log("On-chain transaction lookup failed:", error.message);
+  }
+}
+
+async function startOnChainScanner() {
+  if (onchainListenerStarted) return;
+
+  if (!RPC_URL) {
+    console.log("ON-CHAIN SCANNER OFF: RPC_URL mungon në .env");
+    return;
+  }
+
+  try {
+    const wsEndpoint = RPC_URL
+      .replace(/^https:/, "wss:")
+      .replace(/^http:/, "ws:");
+
+    onChainConnection = new Connection(RPC_URL, {
+      commitment: "confirmed",
+      wsEndpoint
+    });
+
+    await onChainConnection.onLogs(
+      PUMP_PROGRAM,
+      event => { void inspectOnChainCreation(event); },
+      "confirmed"
+    );
+
+    onchainListenerStarted = true;
+    console.log("ON-CHAIN SCANNER: listening to Pump.fun program.");
+    console.log("ON-CHAIN MODE: direct token detection enabled.");
+  } catch (error) {
+    console.log("ON-CHAIN SCANNER START FAILED:", error.message);
+  }
+}
+
+// CONFIG_AUTO_REFRESH: keep dashboard START/STOP synchronized with the bot.
+setInterval(() => {
+  loadConfig().catch(error => {
+    console.log("CONFIG REFRESH FAILED:", error.message);
+  });
+}, 1000);
+
 async function connect() {
-  if (connecting) return;
+  if (connecting || onchainListenerStarted) return;
   connecting = true;
 
   try {
     await loadConfig();
     await restoreSavedPositions();
+    await startOnChainScanner();
   } catch (e) {
-    console.log("Dashboard config unavailable:", e.message);
-    connecting = false;
-    scheduleReconnect();
-    return;
+    console.log("DIRECT SOLANA START ERROR:", e.message);
   }
 
-  ws = new WebSocket(WS_URL);
+  connecting = false;
 
-  ws.on("open", () => {
-    connecting = false;
-    console.log("Connected to PumpPortal.");
-    ws.send(JSON.stringify({ method: "subscribeNewToken" }));
-    console.log("Subscribed to new token creations.");
-    if (!process.env.PUMPPORTAL_API_KEY) {
-      console.log("TP/SL trades feed requires PUMPPORTAL_API_KEY in .env; real buys remain blocked.");
-    }
-    for (const mint of positions.keys()) subscribePositionTrades(mint);
-  });
-
-  ws.on("message", async raw => {
-    try {
-      const data = JSON.parse(raw.toString());
-      await loadConfig();
-      if (data && (data.txType === "buy" || data.txType === "sell") && data.mint) {
-        await handleTradeUpdate(data);
-        return;
-      }
-      await buyNewToken(data);
-    } catch (e) {
-      console.log("Message handler error:", e.message);
-    }
-  });
-
-  ws.on("error", e => console.log("WebSocket error:", e.message));
-
-  ws.on("close", () => {
-    connecting = false;
-    console.log("WebSocket disconnected.");
+  if (onchainListenerStarted) {
+    console.log("DIRECT SOLANA MODE: PumpPortal WebSocket disabled.");
+    console.log("Mayhem-only filter remains enabled.");
+  } else {
+    console.log("DIRECT SOLANA MODE NOT READY: check RPC_URL in .env");
     scheduleReconnect();
-  });
+  }
 }
 
 function scheduleReconnect() {

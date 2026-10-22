@@ -1,0 +1,10 @@
+{
+  "running": false,
+  "liveTrading": false,
+  "buyAmountSol": 0.01,
+  "takeProfitPercent": 50,
+  "stopLossPercent": 10,
+  "holdSeconds": 30,
+  "maxOpenPositions": 3,
+  "slippagePercent": 20
+}
