@@ -173,12 +173,18 @@ app.post("/api/config", (req, res) => {
 });
 
 app.post("/api/start", (_req, res) => {
+  const config = readConfig();
+  config.running = true;
+  writeConfig(config);
+
   const result = startBot();
-  if (result.ok) {
-    const config = readConfig();
-    config.running = true;
-    writeConfig(config);
+
+  if (!result.ok) {
+    const latest = readConfig();
+    latest.running = false;
+    writeConfig(latest);
   }
+
   res.status(result.ok ? 200 : 500).json(result);
 });
 

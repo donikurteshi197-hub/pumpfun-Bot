@@ -76,6 +76,17 @@ function loadWallet() {
   return Keypair.fromSecretKey(Uint8Array.from(bs58.decode(secret)));
 }
 
+const EXPECTED_WALLET_ADDRESS = "HdSbyvbdz3HA9LdNpUgKbwCtmbzrgJUdbx9iyEiSBvyX";
+
+function assertExpectedWallet(wallet) {
+  const actual = wallet.publicKey.toBase58();
+  if (actual !== EXPECTED_WALLET_ADDRESS) {
+    throw new Error(
+      `Wallet mismatch: pritej ${EXPECTED_WALLET_ADDRESS}, u ngarkua ${actual}. Tregtimi nuk duhet të vazhdojë.`
+    );
+  }
+}
+
 function getConfig() {
   return readJson(path.join(ROOT, "runtime-config.json"), {});
 }
@@ -126,6 +137,7 @@ function createTrader() {
   });
 
   const wallet = loadWallet();
+  assertExpectedWallet(wallet);
   const sdk = new OnlinePumpSdk(connection);
 
   async function sendInstructions(instructions) {

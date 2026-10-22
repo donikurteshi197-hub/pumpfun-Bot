@@ -115,7 +115,7 @@ async function main() {
     } catch (e) {
       log(`MONITOR ERROR: ${e.message}`, "error");
     }
-  }, 1000);
+  }, 5000);
 
   const shutdown = async () => {
     clearInterval(monitor);
